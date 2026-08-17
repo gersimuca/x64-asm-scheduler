@@ -1,5 +1,5 @@
 ; ============================================================================
-;  constants.inc — Shared constants for baremetal-cron
+;  constants.inc — Shared constants
 ;  Architecture: x86-64 Linux
 ; ============================================================================
 
