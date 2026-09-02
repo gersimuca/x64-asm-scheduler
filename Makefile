@@ -32,7 +32,7 @@ release: all single
 	strip --strip-all baremetal-cron
 
 test: all single
-	./tests/test.sh
+	bash ./tests/test.sh
 
 clean:
 	rm -rf build baremetal-cron baremetal-cron-single
