@@ -4,63 +4,62 @@ bits 64
 
 global _start
 
-extern print_string
+extern print_stdout
+extern print_stderr
 extern strlen
 extern copy_string
 extern u64_to_dec
 
+extern target_path
+extern backup_path
+extern success_message
+extern error_message
+extern empty_message
+
+
+; ============================================================
+; Storage
+; ============================================================
+
 section .bss
 
-; Directory buffer
-dirbuf:
-    resb 16384
+    align 8
 
-; Source path
+directory_buffer:
+    resb 32768
+
+file_buffer:
+    resb 32768
+
 source_path:
     resb 4096
 
-; Destination path
 destination_path:
     resb 4096
 
-; Decimal number buffer
 number_buffer:
     resb 32
 
-; Time structure
-timespec:
+timestamp:
     resq 2
 
 
-section .rodata
-
-target:
-    db "/tmp/my_project", 0
-
-backup:
-    db "/tmp/my_project/backups", 0
-
-success:
-    db "x64-asm-scheduler: backup complete", 10, 0
-
-failure:
-    db "x64-asm-scheduler: error", 10, 0
-
+; ============================================================
+; Code
+; ============================================================
 
 section .text
 
 _start:
 
     ; --------------------------------------------------------
-    ; Create backups directory.
-    ;
     ; mkdir("/tmp/my_project/backups", 0755)
     ;
-    ; EEXIST is harmless.
+    ; If the directory already exists, execution continues.
     ; --------------------------------------------------------
 
     mov eax, SYS_mkdir
-    mov rdi, backup
+    mov rdi, backup_path
     mov esi, 0755o
     syscall
 
@@ -72,7 +71,7 @@ _start:
     ; --------------------------------------------------------
 
     mov eax, SYS_open
-    mov rdi, target
+    mov rdi, target_path
     mov esi, O_RDONLY
     xor edx, edx
     syscall
@@ -86,44 +85,57 @@ _start:
     ; --------------------------------------------------------
     ; Read directory entries.
     ;
-    ; getdents64(fd, buffer, sizeof(buffer))
+    ; getdents64(fd, buffer, 32768)
     ; --------------------------------------------------------
 
     mov eax, SYS_getdents64
     mov rdi, r12
-    mov rsi, dirbuf
-    mov edx, 16384
+    mov rsi, directory_buffer
+    mov edx, 32768
     syscall
 
     test rax, rax
-    jle .close_directory
+    js .close_error
+
+    jz .finish
+
 
     mov r13, rax
 
+    ; Current offset in directory buffer.
     xor r14d, r14d
 
+    ; Number of successful backups.
+    xor r15d, r15d
+
+
+; ============================================================
+; Directory iteration
+; ============================================================
 
 .next_entry:
 
     cmp r14, r13
-    jae .close_directory
+    jae .finish
 
 
     ; rbx = current linux_dirent64
-    lea rbx, [dirbuf + r14]
+    lea rbx, [directory_buffer + r14]
 
 
-    ; --------------------------------------------------------
-    ; linux_dirent64:
+    ; linux_dirent64 layout:
     ;
-    ; offset 0  = ino
-    ; offset 8  = off
-    ; offset 16 = reclen
-    ; offset 18 = type
-    ; offset 19 = name
-    ; --------------------------------------------------------
+    ; offset 0   : d_ino
+    ; offset 8   : d_off
+    ; offset 16  : d_reclen
+    ; offset 18  : d_type
+    ; offset 19  : d_name
+    ;
 
     movzx ecx, word [rbx + 16]
+
+    test ecx, ecx
+    jz .close_error
 
 
     ; Only regular files.
@@ -131,38 +143,13 @@ _start:
     jne .advance
 
 
-    lea r15, [rbx + 19]
+    lea rsi, [rbx + 19]
 
 
-    ; Ignore "." and ".."
-    cmp byte [r15], '.'
+    ; Ignore hidden entries such as "." and "..".
+    cmp byte [rsi], '.'
     je .advance
 
-
-    ; Ignore "backups".
-    cmp byte [r15], 'b'
-    jne .process_file
-
-    cmp byte [r15 + 1], 'a'
-    jne .process_file
-
-    cmp byte [r15 + 2], 'c'
-    jne .process_file
-
-    cmp byte [r15 + 3], 'k'
-    jne .process_file
-
-    cmp byte [r15 + 4], 'u'
-    jne .process_file
-
-    cmp byte [r15 + 5], 'p'
-    jne .process_file
-
-    cmp byte [r15 + 6], 's'
-    je .advance
-
-
-.process_file:
 
     ; --------------------------------------------------------
     ; Build source path:
@@ -171,7 +158,7 @@ _start:
     ; --------------------------------------------------------
 
     mov rdi, source_path
-    mov rsi, target
+    mov rsi, target_path
 
     call copy_string
 
@@ -184,7 +171,7 @@ _start:
     mov rdi, source_path
     add rdi, rax
 
-    mov rsi, r15
+    lea rsi, [rbx + 19]
 
     call copy_string
 
@@ -207,36 +194,43 @@ _start:
 
     ; --------------------------------------------------------
     ; Read source file.
+    ;
+    ; Current implementation supports files up to 32768 bytes.
     ; --------------------------------------------------------
 
     mov eax, SYS_read
     mov rdi, r11
-    mov rsi, dirbuf
-    mov edx, 16384
+    mov rsi, file_buffer
+    mov edx, 32768
     syscall
 
     mov r10, rax
 
 
     ; Close source.
+    push r10
+
     mov eax, SYS_close
     mov rdi, r11
     syscall
 
+    pop r10
 
+
+    ; read() error
     test r10, r10
-    jle .advance
+    js .advance
 
 
     ; --------------------------------------------------------
-    ; Get realtime timestamp.
+    ; Get current Unix timestamp.
     ;
-    ; clock_gettime(CLOCK_REALTIME, &timespec)
+    ; timestamp.tv_sec is at [timestamp].
     ; --------------------------------------------------------
 
     mov eax, SYS_clock_gettime
     mov edi, CLOCK_REALTIME
-    mov rsi, timespec
+    mov rsi, timestamp
     syscall
 
     test rax, rax
@@ -246,18 +240,11 @@ _start:
     ; --------------------------------------------------------
     ; Build destination:
     ;
-    ; /tmp/my_project/backups/
-    ; filename
-    ; .
-    ; seconds
-    ;
-    ; Example:
-    ;
-    ; backups/file.txt.1771234567
+    ; /tmp/my_project/backups/<filename>.<unix-seconds>
     ; --------------------------------------------------------
 
     mov rdi, destination_path
-    mov rsi, backup
+    mov rsi, backup_path
 
     call copy_string
 
@@ -267,47 +254,45 @@ _start:
 
     inc rax
 
+
     mov rdi, destination_path
     add rdi, rax
 
-    mov rsi, r15
+    lea rsi, [rbx + 19]
 
     call copy_string
 
-    dec rax
 
+    ; Find end of filename.
+    mov rdi, destination_path
+
+    call strlen
+
+
+    ; Append ".".
     mov byte [destination_path + rax], '.'
 
     inc rax
 
 
     ; --------------------------------------------------------
-    ; Convert timestamp seconds to decimal.
+    ; Convert Unix timestamp to decimal.
     ; --------------------------------------------------------
 
-    mov rsi, [timespec]
-
     mov rdi, number_buffer
+    mov rsi, [timestamp]
 
     call u64_to_dec
 
-    mov rcx, rax
 
+    ; --------------------------------------------------------
+    ; Append timestamp.
+    ; --------------------------------------------------------
 
-    ; Copy timestamp to destination.
-    mov rsi, number_buffer
-
-    mov rdi, destination_path
-
-    add rdi, rax
-
-
-    ; Recalculate filename end.
     mov rdi, destination_path
 
     call strlen
 
-    mov rdi, destination_path
     add rdi, rax
 
     mov rsi, number_buffer
@@ -318,7 +303,7 @@ _start:
     ; --------------------------------------------------------
     ; Create backup file.
     ;
-    ; O_EXCL prevents overwriting an existing backup.
+    ; O_EXCL prevents accidental overwrite.
     ; --------------------------------------------------------
 
     mov eax, SYS_open
@@ -338,25 +323,46 @@ _start:
 
 
     ; --------------------------------------------------------
-    ; Write backup.
+    ; Write file.
+    ;
+    ; Empty files are valid and require no write syscall.
     ; --------------------------------------------------------
+
+    test r10, r10
+    jz .close_backup
+
 
     mov eax, SYS_write
 
     mov rdi, r11
 
-    mov rsi, dirbuf
+    mov rsi, file_buffer
 
     mov rdx, r10
 
     syscall
 
 
-    ; Close backup.
+    ; We expect one complete write for this fixed-size buffer.
+    cmp rax, r10
+    jne .close_backup
+
+
+.close_backup:
+
     mov eax, SYS_close
+
     mov rdi, r11
+
     syscall
 
+
+    inc r15
+
+
+; ============================================================
+; Advance to next directory entry
+; ============================================================
 
 .advance:
 
@@ -367,32 +373,76 @@ _start:
     jmp .next_entry
 
 
-.close_directory:
+; ============================================================
+; Normal finish
+; ============================================================
+
+.finish:
 
     mov eax, SYS_close
+
     mov rdi, r12
+
     syscall
 
 
-    ; --------------------------------------------------------
-    ; Success.
-    ; --------------------------------------------------------
+    test r15, r15
 
-    mov rdi, success
-    call print_string
+    jz .no_files
+
+
+    mov rdi, success_message
+
+    call print_stdout
+
 
     xor edi, edi
 
     mov eax, SYS_exit
+
+    syscall
+
+
+; ============================================================
+; No regular files
+; ============================================================
+
+.no_files:
+
+    mov rdi, empty_message
+
+    call print_stdout
+
+
+    xor edi, edi
+
+    mov eax, SYS_exit
+
+    syscall
+
+
+; ============================================================
+; Error while processing directory
+; ============================================================
+
+.close_error:
+
+    mov eax, SYS_close
+
+    mov rdi, r12
+
     syscall
 
 
 .error:
 
-    mov rdi, failure
-    call print_string
+    mov rdi, error_message
+
+    call print_stderr
+
 
     mov edi, 1
 
     mov eax, SYS_exit
+
     syscall
