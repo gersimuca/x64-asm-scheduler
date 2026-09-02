@@ -1,18 +1,36 @@
-NASM=nasm
-LD=ld
+NASM ?= nasm
+LD ?= ld
 
-all:
+.PHONY: all single test release clean
+
+all: baremetal-cron
+
+baremetal-cron: build/main.o build/utils.o build/data.o
+	$(LD) -o $@ $^
+
+build/main.o: src/main.asm src/constants.inc
 	mkdir -p build
-	$(NASM) -f elf64 src/main.asm -o build/main.o
-	$(NASM) -f elf64 src/utils.asm -o build/utils.o
-	$(LD) -o baremetal-cron build/main.o build/utils.o
+	$(NASM) -f elf64 src/main.asm -o $@
 
-single:
-	$(NASM) -f bin baremetal-cron.asm -o baremetal-cron-single
-	chmod +x baremetal-cron-single
+build/utils.o: src/utils.asm src/constants.inc
+	mkdir -p build
+	$(NASM) -f elf64 src/utils.asm -o $@
 
-release: all
+build/data.o: src/data.asm
+	mkdir -p build
+	$(NASM) -f elf64 src/data.asm -o $@
+
+single: baremetal-cron-single
+
+baremetal-cron-single: baremetal-cron.asm
+	$(NASM) -f bin $< -o $@
+	chmod +x $@
+
+release: all single
 	strip --strip-all baremetal-cron
+
+test: all single
+	./tests/test.sh
 
 clean:
 	rm -rf build baremetal-cron baremetal-cron-single
