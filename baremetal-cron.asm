@@ -3,42 +3,41 @@ bits 64
 ; ============================================================
 ; x64-asm-scheduler
 ;
-; Linux x86-64
-; NASM
-; syscall only
+; Standalone Linux x86-64 ELF
 ;
-; No:
-;   libc
-;   Python
-;   C
-;   shell
-;   external commands
+; Build:
+;
+;   nasm -f bin baremetal-cron.asm -o baremetal-cron-single
+;
+; Run:
+;
+;   ./baremetal-cron-single
 ;
 ; ============================================================
 
-%define SYS_read          0
-%define SYS_write         1
-%define SYS_open          2
-%define SYS_close         3
-%define SYS_mkdir         83
-%define SYS_getdents64    217
-%define SYS_clock_gettime 228
-%define SYS_exit          60
+%define SYS_read            0
+%define SYS_write           1
+%define SYS_open            2
+%define SYS_close           3
+%define SYS_mkdir           83
+%define SYS_getdents64      217
+%define SYS_clock_gettime   228
+%define SYS_exit            60
 
-%define CLOCK_REALTIME    0
+%define CLOCK_REALTIME      0
 
-%define O_RDONLY          0
-%define O_WRONLY          1
-%define O_CREAT           64
-%define O_EXCL            128
+%define O_RDONLY            0
+%define O_WRONLY            1
+%define O_CREAT             64
+%define O_EXCL              128
 
-%define DT_REG            8
+%define DT_REG              8
 
 org 0x400000
 
 
 ; ============================================================
-; ELF HEADER
+; ELF64 HEADER
 ; ============================================================
 
 ehdr:
@@ -105,7 +104,7 @@ phdr:
 _start:
 
     ; --------------------------------------------------------
-    ; mkdir("/tmp/my_project/backups", 0755)
+    ; mkdir backup directory
     ; --------------------------------------------------------
 
     mov eax, SYS_mkdir
@@ -118,7 +117,7 @@ _start:
 
 
     ; --------------------------------------------------------
-    ; open("/tmp/my_project", O_RDONLY)
+    ; Open target directory
     ; --------------------------------------------------------
 
     mov eax, SYS_open
@@ -133,13 +132,13 @@ _start:
 
     test rax, rax
 
-    js exit_error
+    js error
 
     mov r12, rax
 
 
     ; --------------------------------------------------------
-    ; getdents64()
+    ; Read directory entries
     ; --------------------------------------------------------
 
     mov eax, SYS_getdents64
@@ -148,13 +147,15 @@ _start:
 
     mov rsi, directory_buffer
 
-    mov edx, 16384
+    mov edx, 32768
 
     syscall
 
     test rax, rax
 
-    jle finish
+    js error_with_fd
+
+    jz finish
 
 
     mov r13, rax
@@ -163,10 +164,10 @@ _start:
 
 
 ; ============================================================
-; DIRECTORY LOOP
+; Directory loop
 ; ============================================================
 
-directory_loop:
+entry_loop:
 
     cmp r14, r13
 
@@ -176,60 +177,31 @@ directory_loop:
     lea rbx, [directory_buffer + r14]
 
 
-    ; reclen
     movzx ecx, word [rbx + 16]
+
+    test ecx, ecx
+
+    jz error_with_fd
 
 
     ; Only regular files.
     cmp byte [rbx + 18], DT_REG
 
-    jne next_entry
+    jne advance
 
 
-    ; Filename.
-    lea r15, [rbx + 19]
+    lea rsi, [rbx + 19]
 
 
     ; Ignore hidden entries.
-    cmp byte [r15], '.'
+    cmp byte [rsi], '.'
 
-    je next_entry
-
-
-    ; Ignore backups directory name.
-    cmp byte [r15], 'b'
-
-    jne backup_check_done
-
-    cmp byte [r15 + 1], 'a'
-    jne backup_check_done
-
-    cmp byte [r15 + 2], 'c'
-    jne backup_check_done
-
-    cmp byte [r15 + 3], 'k'
-    jne backup_check_done
-
-    cmp byte [r15 + 4], 'u'
-    jne backup_check_done
-
-    cmp byte [r15 + 5], 'p'
-    jne backup_check_done
-
-    cmp byte [r15 + 6], 's'
-    jne backup_check_done
-
-    jmp next_entry
+    je advance
 
 
-backup_check_done:
-
-
-    ; ========================================================
-    ; Build source path.
-    ;
-    ; target_path + "/" + filename
-    ; ========================================================
+    ; --------------------------------------------------------
+    ; Build source path
+    ; --------------------------------------------------------
 
     mov rdi, source_path
 
@@ -249,14 +221,14 @@ backup_check_done:
 
     add rdi, rax
 
-    mov rsi, r15
+    lea rsi, [rbx + 19]
 
     call copy_string
 
 
-    ; ========================================================
-    ; Open source.
-    ; ========================================================
+    ; --------------------------------------------------------
+    ; Open source file
+    ; --------------------------------------------------------
 
     mov eax, SYS_open
 
@@ -270,14 +242,14 @@ backup_check_done:
 
     test rax, rax
 
-    js next_entry
+    js advance
 
     mov r11, rax
 
 
-    ; ========================================================
-    ; Read file.
-    ; ========================================================
+    ; --------------------------------------------------------
+    ; Read source
+    ; --------------------------------------------------------
 
     mov eax, SYS_read
 
@@ -285,29 +257,33 @@ backup_check_done:
 
     mov rsi, file_buffer
 
-    mov edx, 16384
+    mov edx, 32768
 
     syscall
 
     mov r10, rax
 
 
-    ; close source
+    ; Close source.
+    push r10
+
     mov eax, SYS_close
 
     mov rdi, r11
 
     syscall
 
+    pop r10
+
 
     test r10, r10
 
-    jle next_entry
+    js advance
 
 
-    ; ========================================================
-    ; clock_gettime()
-    ; ========================================================
+    ; --------------------------------------------------------
+    ; Get timestamp
+    ; --------------------------------------------------------
 
     mov eax, SYS_clock_gettime
 
@@ -319,17 +295,14 @@ backup_check_done:
 
     test rax, rax
 
-    js next_entry
+    js advance
 
 
-    ; ========================================================
-    ; Build destination.
+    ; --------------------------------------------------------
+    ; Build destination path
     ;
-    ; /tmp/my_project/backups/
-    ; filename
-    ; .
-    ; timestamp
-    ; ========================================================
+    ; /tmp/my_project/backups/<filename>.<unix-seconds>
+    ; --------------------------------------------------------
 
     mov rdi, destination_path
 
@@ -349,36 +322,33 @@ backup_check_done:
 
     add rdi, rax
 
-    mov rsi, r15
+    lea rsi, [rbx + 19]
 
     call copy_string
 
 
-    dec rax
+    mov rdi, destination_path
+
+    call strlen
+
 
     mov byte [destination_path + rax], '.'
 
     inc rax
 
 
-    ; ========================================================
-    ; Convert timestamp seconds to decimal.
-    ; ========================================================
+    ; Convert timestamp.
+    mov rdi, number_buffer
 
     mov rsi, [timestamp]
 
-    mov rdi, number_buffer
-
-    call number_to_string
+    call u64_to_dec
 
 
-    ; ========================================================
-    ; Append number.
-    ; ========================================================
-
+    ; Append timestamp.
     mov rdi, destination_path
 
-    call string_length
+    call strlen
 
     add rdi, rax
 
@@ -387,9 +357,9 @@ backup_check_done:
     call copy_string
 
 
-    ; ========================================================
-    ; Create destination.
-    ; ========================================================
+    ; --------------------------------------------------------
+    ; Create destination
+    ; --------------------------------------------------------
 
     mov eax, SYS_open
 
@@ -403,14 +373,19 @@ backup_check_done:
 
     test rax, rax
 
-    js next_entry
+    js advance
 
     mov r11, rax
 
 
-    ; ========================================================
-    ; Write backup.
-    ; ========================================================
+    ; --------------------------------------------------------
+    ; Write backup
+    ; --------------------------------------------------------
+
+    test r10, r10
+
+    jz close_backup
+
 
     mov eax, SYS_write
 
@@ -423,9 +398,7 @@ backup_check_done:
     syscall
 
 
-    ; ========================================================
-    ; Close backup.
-    ; ========================================================
+close_backup:
 
     mov eax, SYS_close
 
@@ -435,20 +408,20 @@ backup_check_done:
 
 
 ; ============================================================
-; NEXT DIRECTORY ENTRY
+; Next entry
 ; ============================================================
 
-next_entry:
+advance:
 
     movzx eax, word [rbx + 16]
 
     add r14, rax
 
-    jmp directory_loop
+    jmp entry_loop
 
 
 ; ============================================================
-; FINISH
+; Finish
 ; ============================================================
 
 finish:
@@ -479,10 +452,23 @@ finish:
 
 
 ; ============================================================
-; ERROR
+; Error with open directory
 ; ============================================================
 
-exit_error:
+error_with_fd:
+
+    mov eax, SYS_close
+
+    mov rdi, r12
+
+    syscall
+
+
+; ============================================================
+; Error
+; ============================================================
+
+error:
 
     mov eax, SYS_write
 
@@ -503,38 +489,36 @@ exit_error:
 
 
 ; ============================================================
-; STRING LENGTH
+; strlen
 ;
 ; rdi = string
 ; rax = length
 ; ============================================================
 
-string_length:
+strlen:
 
     xor eax, eax
 
-.string_loop:
+.len_loop:
 
     cmp byte [rdi + rax], 0
 
-    je .string_done
+    je .done
 
     inc rax
 
-    jmp .string_loop
+    jmp .len_loop
 
-.string_done:
+.done:
 
     ret
 
 
 ; ============================================================
-; STRING COPY
+; copy_string
 ;
 ; rdi = destination
 ; rsi = source
-;
-; returns rax = bytes copied including NUL
 ; ============================================================
 
 copy_string:
@@ -557,20 +541,19 @@ copy_string:
 
 
 ; ============================================================
-; NUMBER TO STRING
+; u64_to_dec
 ;
-; rsi = unsigned 64-bit number
 ; rdi = destination
-;
+; rsi = unsigned 64-bit integer
 ; ============================================================
 
-number_to_string:
+u64_to_dec:
 
     mov rax, rsi
 
     test rax, rax
 
-    jnz .convert_number
+    jnz .convert
 
 
     mov byte [rdi], '0'
@@ -580,18 +563,18 @@ number_to_string:
     ret
 
 
-.convert_number:
+.convert:
 
     xor ecx, ecx
 
-    mov rbx, 10
+    mov r8, 10
 
 
 .divide:
 
     xor edx, edx
 
-    div rbx
+    div r8
 
     add dl, '0'
 
@@ -607,7 +590,7 @@ number_to_string:
     xor eax, eax
 
 
-.write_number:
+.write:
 
     pop rdx
 
@@ -615,7 +598,7 @@ number_to_string:
 
     inc rax
 
-    loop .write_number
+    loop .write
 
 
     mov byte [rdi + rax], 0
@@ -624,7 +607,7 @@ number_to_string:
 
 
 ; ============================================================
-; DATA
+; Read-only data
 ; ============================================================
 
 target_path:
@@ -652,7 +635,7 @@ error_length equ $ - error_message
 
 
 ; ============================================================
-; BSS-LIKE STORAGE
+; Storage
 ; ============================================================
 
 align 8
@@ -680,12 +663,12 @@ number_buffer:
 
 directory_buffer:
 
-    times 16384 db 0
+    times 32768 db 0
 
 
 file_buffer:
 
-    times 16384 db 0
+    times 32768 db 0
 
 
 filesize equ $ - $$
