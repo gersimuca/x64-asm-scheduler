@@ -1,11 +1,27 @@
-on: [push, pull_request]
+name: assembly-ci
+
+on:
+  push:
+  pull_request:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y nasm
-      - run: make
-      - run: make single
-      - run: make test
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install NASM
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm binutils
+
+      - name: Build modular executable
+        run: make
+
+      - name: Build single-file executable
+        run: make single
+
+      - name: Run tests
+        run: make test
