@@ -38,21 +38,6 @@ For example:
 ```text
 file1.txt.1788290000
 ```
-
-### Current scope
-
-The project is intentionally small and focused.
-
-It currently **does not**:
-
-* install a cron job
-* automatically run every minute
-* use `YYYYMMDD_HHMMSS` timestamps
-* recursively scan subdirectories
-* handle files larger than the current 32 KiB buffer
-
-Cron scheduling and human-readable timestamps are planned future features.
-
 ---
 
 ## Quick Start
@@ -288,7 +273,7 @@ baremetal-cron.asm
 
 It contains the executable logic in one assembly file.
 
-It is useful for learning how a Linux x86-64 ELF executable can be built
+It is useful for Linux x86-64 ELF executable can be built
 directly from assembly.
 
 ---
@@ -358,45 +343,8 @@ The current implementation uses these Linux x86-64 system calls:
 | `clock_gettime` | Get the current Unix timestamp |
 | `exit`          | Exit the program               |
 
-The program does not use functions such as:
 
-```text
-fopen()
-fread()
-fwrite()
-printf()
-malloc()
-```
-
-Instead, it performs the required operations using Linux system calls.
-
----
-
-## Why Assembly?
-
-This is primarily an educational project.
-
-The goal is to understand how a Linux program works close to the kernel,
-including:
-
-* x86-64 registers
-* Linux syscall conventions
-* file descriptors
-* ELF64 executables
-* Linux directory entries
-* raw file I/O
-* timestamps
-* NASM
-* GNU `ld`
-* memory sections
-* assembly linking
-* standalone ELF construction
-
-The project is not intended to suggest that assembly is generally better
-than C, Rust, Go, or other languages for production backup software.
-
-Instead, it is a practical way to learn how these lower-level mechanisms
-work.
+It performs the required operations using Linux system calls.
 
 ---
 
@@ -413,18 +361,6 @@ GNU make
 ```
 
 ### Runtime dependencies
-
-The backup executable itself does not require:
-
-```text
-Python
-C
-libc
-cp
-mkdir
-date
-crontab
-```
 
 It communicates directly with the Linux kernel through system calls.
 
@@ -526,9 +462,6 @@ file.txt.20260816_203245
 
 ### 4. Cron Scheduling
 
-Despite the project name, cron scheduling is **not currently installed
-or configured by the program**.
-
 At the moment, you run the backup manually:
 
 ```bash
@@ -549,48 +482,6 @@ backup files
 ```
 
 The current version does not modify your crontab.
-
----
-
-## Planned Features
-
-The project can be developed in stages.
-
-### Backup improvements
-
-```text
-□ Support files larger than 32 KiB
-□ Read and write files in chunks
-□ Handle partial writes
-□ Improve error reporting
-□ Improve directory-entry handling
-```
-
-### Timestamp improvements
-
-```text
-□ YYYYMMDD_HHMMSS filenames
-□ Better timestamp handling
-□ Collision handling
-```
-
-### Scheduler
-
-```text
-□ Cron configuration
-□ Optional cron installation
-□ Configurable schedule
-```
-
-### Advanced backup
-
-```text
-□ Recursive directory support
-□ File filtering
-□ Configurable target directory
-□ Configurable backup directory
-□ Backup retention policies
-```
 
 ---
 
@@ -793,67 +684,3 @@ Make sure all tests pass.
 If you add a new feature, update the relevant documentation as well.
 
 ---
-
-## License
-
-Add your preferred license here.
-
-For example:
-
-```text
-MIT License
-```
-
-if you choose to release the project under the MIT License.
-
----
-
-## Summary
-
-`x64-asm-scheduler` is a small Linux x86-64 assembly project that
-demonstrates direct interaction with the Linux kernel.
-
-The current backup flow is:
-
-```text
-Find files
-    ↓
-Read file
-    ↓
-Get Unix timestamp
-    ↓
-Create backup filename
-    ↓
-Write backup
-```
-
-The long-term goal is to extend this into a small assembly-based
-scheduler capable of automatically creating timestamped backups.
-
-For now, the quickest way to try it is:
-
-```bash
-git clone https://github.com/YOURNAME/x64-asm-scheduler.git
-cd x64-asm-scheduler
-
-make
-
-mkdir -p /tmp/my_project
-printf 'hello\n' > /tmp/my_project/file1.txt
-
-./baremetal-cron
-
-ls -la /tmp/my_project/backups
-```
-
-To run the complete test suite:
-
-```bash
-make test
-```
-
-A successful test run ends with:
-
-```text
-ALL TESTS PASSED
-```
