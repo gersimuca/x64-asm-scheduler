@@ -1,19 +1,22 @@
 bits 64
 
+%include "constants.inc"
+
 global strlen
-global print_string
-global streq
+global print_stdout
+global print_stderr
 global copy_string
 global u64_to_dec
 
 section .text
 
-; ------------------------------------------------------------
+; ============================================================
 ; strlen
 ;
-; rdi = NUL terminated string
-; returns rax = string length
-; ------------------------------------------------------------
+; rdi = NUL-terminated string
+; returns:
+;   rax = length, excluding NUL
+; ============================================================
 
 strlen:
     xor eax, eax
@@ -29,13 +32,13 @@ strlen:
     ret
 
 
-; ------------------------------------------------------------
-; print_string
+; ============================================================
+; print_stdout
 ;
-; rdi = NUL terminated string
-; ------------------------------------------------------------
+; rdi = NUL-terminated string
+; ============================================================
 
-print_string:
+print_stdout:
     push rdi
 
     call strlen
@@ -51,51 +54,39 @@ print_string:
     ret
 
 
-; ------------------------------------------------------------
-; streq
+; ============================================================
+; print_stderr
 ;
-; rdi = string 1
-; rsi = string 2
-;
-; returns:
-;   eax = 1 equal
-;   eax = 0 different
-; ------------------------------------------------------------
+; rdi = NUL-terminated string
+; ============================================================
 
-streq:
-.loop:
-    mov al, [rdi]
-    mov dl, [rsi]
+print_stderr:
+    push rdi
 
-    cmp al, dl
-    jne .different
+    call strlen
 
-    test al, al
-    je .equal
+    mov rdx, rax
 
-    inc rdi
-    inc rsi
+    pop rsi
 
-    jmp .loop
+    mov eax, SYS_write
+    mov edi, STDERR
+    syscall
 
-.equal:
-    mov eax, 1
-    ret
-
-.different:
-    xor eax, eax
     ret
 
 
-; ------------------------------------------------------------
+; ============================================================
 ; copy_string
 ;
 ; rdi = destination
 ; rsi = source
 ;
-; copies terminating NUL
-; returns rax = number of bytes copied
-; ------------------------------------------------------------
+; Copies the terminating NUL.
+;
+; returns:
+;   rax = number of bytes copied including NUL
+; ============================================================
 
 copy_string:
     xor eax, eax
@@ -112,16 +103,17 @@ copy_string:
     ret
 
 
-; ------------------------------------------------------------
+; ============================================================
 ; u64_to_dec
 ;
-; rdi = destination buffer
-; rsi = unsigned integer
+; rdi = destination
+; rsi = unsigned 64-bit integer
 ;
-; converts integer to decimal ASCII.
+; Converts integer to decimal ASCII.
 ;
-; returns rax = number of characters.
-; ------------------------------------------------------------
+; returns:
+;   rax = number of decimal characters
+; ============================================================
 
 u64_to_dec:
     mov rax, rsi
@@ -130,16 +122,19 @@ u64_to_dec:
     jnz .convert
 
     mov byte [rdi], '0'
+    mov byte [rdi + 1], 0
+
     mov eax, 1
     ret
 
+
 .convert:
     xor ecx, ecx
-    mov rbx, 10
+    mov r8, 10
 
 .divide:
     xor edx, edx
-    div rbx
+    div r8
 
     add dl, '0'
 
@@ -160,5 +155,7 @@ u64_to_dec:
     inc rax
 
     loop .write
+
+    mov byte [rdi + rax], 0
 
     ret
